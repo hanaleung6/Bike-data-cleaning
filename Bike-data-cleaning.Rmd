@@ -1,0 +1,83 @@
+---
+title: "Bike-data-cleaning"
+author: "Yongqi Liang"
+date: "29/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Cleaning the bike data with refinr
+
+We will look at the cycle counter data.
+```{r}
+# choose the directory here which contain the three bike counter data files
+bike_files<- list.files("F:/STATS369/github/bike/data",pattern=".csv",full=TRUE)
+# we'll look at the map function on Monday - check out the help page if you like
+# here it iterates over each element of bike_files, applying read_csv to each
+bike_data<-map(bike_files,read_csv)
+```
+
+There are some columns that are entirely `NA`: get rid of them with `select_if`
+```{r}
+notallNA<-function(x) !all(is.na(x))
+# again using map - this tie applying the user defined function notallNA to each element of the list bike_data
+bike_data <- map(bike_data, select_if, notallNA)
+```
+
+Now we could try tidying the data
+```{r}
+# again using map - try to pivot_longer each dataframe in bike_data
+bike_tidy<-map(bike_data, pivot_longer, values_to ="rider_count", names_to ="counter",-Date)
+# turn list of data frames into a single data frame
+allbikes<-bind_rows(bike_tidy)
+allbikes %>% 
+  group_by(counter) %>% 
+  count() 
+```
+
+Even among the first few rows shown it is clear that `Curran St total`, `Curran Street Total`, and `Curran Street Total Cyclists` should be the same.
+
+# Task1
+## Why have we got multiple names for what should be the same counter?
+The counter names change across years so when we merge the files, we get multiple names for the same counter.
+
+# Task2
+## Figure out how you can merge these names together and get consistent column headers.
+   a. Load the `refinr` package and read the vignette. Try using `n_gram_merge()` and `key_collision_merge` on the `counter` variable.  Then try the `ignore_strings` argument to the functions, starting with `ignore_strings=c("cycle","counter","total","cyclists")`.
+We won't be able to get all the way automatically: there's no way `refinr` can know that "Quay St Vector Arena" and "Quay St Spark Arena" are the same as each other but not the same as "Quay St Totem" so the next step requires some manual work:
+   b. write out to a file a two-column table with the distinct original values of `counter` and the merged values. (use `unique` to get distinct values of a vector)
+   c. Edit the second column of this table **by hand** in a text editor or spreadsheet (it helps if it's in alphabetical order - so use `sort`).  
+   d. Read the table back in and call it something like `name_table`, with column names `counter` and `counter_edited`
+   e. Now, use a join on `counter` to add the edited name to the `allbikes` data set.
+```{r}
+library(refinr)
+counter <- unique(allbikes$counter)
+counter_edited <- n_gram_merge(counter, ignore_strings=c("cycle","counter","total","cyclists","st","street","Drive","Dr","Rd","Road","new","SP"))
+write_csv(tibble(counter, counter_edited), "namesTableFixed.csv")
+  
+# OFFLINE FIXES
+  
+name_table = read_csv("namesTableFixed.csv")
+```
+
+# Task3
+## Now tidy the data and plot a graph showing the day-of-week pattern for each counter.
+Here we do step e. from above, then plot the data after a little more tidying
+```{r, fig.height=20, fig.width=10}
+allbikes = allbikes %>% 
+  inner_join(name_table, by = "counter") %>%
+  separate(Date, into = c("weekday", "day", "month", "year"), sep = " ", convert = TRUE) %>% 
+  filter(!is.na(rider_count), !is.na(weekday))
+# Order factors so they make sense
+allbikes$weekday = factor(allbikes$weekday, levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+
+allbikes %>% 
+  qplot(x = weekday, y = rider_count, data = ., geom = "boxplot") +   
+  facet_wrap(~ counter_edited, scales = "free_y", ncol = 4 ) # use "free_y" so that each subplot has its own y scale
+```
+
+We can see that most counters have a strong day of week effect - some routes seem to be used more in weekdays, others are used more in the weekends.
